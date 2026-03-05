@@ -1,182 +1,135 @@
-## Window Evacuation Button-Activated Release System (Window E-BARS)
+# Security Policy
 
-**Arduino Nano ESP32 | MLE04641 | ABX00083
+## Supported Versions | Arduino IDE
 
-This project implements a fire-alert window guard safety device using temperature sensing, servo-driven window release, RGB indicators, buzzer alarms, event logging, and WiFi time synchronization.
+Based on the libraries and APIs used in the code (WiFi.h, time.h, EEPROM.h, ESP32Servo.h, etc.),
+The sketch is compatible with all modern versions of the Arduino IDE that support the ESP32 core.
 
-## Materials Needed
+| Version | Supported          |
+| ------- | ------------------ |
+| 1.8.19  | :white_check_mark: |
+| 2.0.x   | :white_check_mark: |
+| 2.1.x   | :white_check_mark: |
+| 2.2.x   | :white_check_mark: |
+| 2.3.x   | :white_check_mark: |
 
-Core Hardware
-	•	Arduino Nano ESP32 (ABX00083)
-	•	DHT22 Temperature and Humidity Sensor
-	•	SG90 or compatible Servo Motor
-	•	Push Button (momentary)
-	•	Passive or Active Buzzer
-	•	Common-Cathode RGB LED
-	•	7-Segment Display (single digit)
+## Supported Microcontrollers
 
-Optional / External Components
-	•	3-32v Boost Converter
-	•	Breadboard or PCB
-	•	Jumper/Solid wires
-	•	5V regulated power supply
-	•	USB Type-C cable
+	•	Arduino ESP32 Core ≥ 2.0.11
+	•	Works best with 2.0.14+
+  
+## Reporting a Vulnerability
 
+**Security & Reliability Guidelines for Contributors**
 
-## Pin Configuration
+The following practices must be followed when modifying or extending the system. These rules are intended to preserve system reliability, safety behavior, and data integrity.
 
-The following pins are defined inside the firmware.
+- Serial Command Interface Control
 
-**Sensor and Actuators
-	•	DHT22 → D11
-	•	Servo → A3
-	•	Button → D2
-	•	Buzzer → D13
+The command-line interface (CLI) can modify safety-critical parameters (servo positions, thresholds, simulation mode, and log operations). To prevent misuse or unintended configuration changes, implement controlled access.
 
-**RGB LED
-	•	Red → A0
-	•	Green → A1
-	•	Blue → A2
+Recommended approaches:
+	•	Compile-time control
+	•	Provide a build flag such as ENABLE_CLI.
+	•	Production builds should compile with CLI disabled.
+	•	Physical configuration enable
+	•	Only allow CLI commands if a designated configuration jumper pin is held LOW during boot.
+	•	Startup time window
+	•	Accept commands only within a limited time window (for example, the first 60 seconds after boot).
+	•	Input rate limiting
+	•	Ignore excessive serial input to prevent command flooding.
 
-**Seven Segment Display
-	•	Segment A → D9
-	•	Segment B → D10
-	•	Segment C → D4
-	•	Segment D → D5
-	•	Segment E → D6
-	•	Segment F → D8
-	•	Segment G → D7
-	•	Decimal Point → D3
+These controls ensure the device cannot be reconfigured unintentionally during normal operation.
 
 
-## Libraries to Install
+- Event Log Integrity
 
-Install the following libraries in the Arduino IDE Library Manager before compiling.
-	•	WiFi.h (included with ESP32 core)
-	•	time.h (included with ESP32 core)
-	•	DHT sensor library
-	•	ESP32Servo
-	•	EEPROM
+The event log is intended to preserve a reliable timeline of system behavior. The following protections help ensure logs remain trustworthy:
+	•	Add a CRC (CRC16 or CRC32) to both StatsData and EventRecord.
+	•	Reject records that fail CRC validation when reading logs.
+	•	Maintain a monotonic event counter so events cannot be silently reordered.
+	•	Maintain a last valid write index marker to allow safe recovery after power loss.
+	•	Provide an optional read-only mode preventing log deletion without a physical hardware jumper.
 
-Install process:
-	1.	Open Arduino IDE
-	2.	Go to Sketch → Include Library → Manage Libraries
-	3.	Search and install:
-
-	•	DHT sensor library by Adafruit
-	•	ESP32Servo
-
-The ESP 32 Board package already includes the other libraries
-
-## Board Setup
-
-Before uploading:
-	1.	Install ESP32 Board Support Package in Arduino IDE.
-	2.	Select board:
-        Arduino Nano ESP32
-	3.	Set the correct COM port.
+These protections allow the system to detect corrupted or partially written records.
 
 
-## Code Changes Before Upload
+- Statistics Storage Protection
 
-1. WiFi Credentials
+Statistics stored in persistent memory should be protected against corruption caused by unexpected power loss.
 
-Modify the WiFi list inside the code.
+Recommended method:
+	•	Store statistics using a dual-slot (A/B) structure.
+	•	Each slot contains:
+	•	Version counter
+	•	CRC
+	•	Statistics data
+	•	On write:
+	•	Write the next slot with incremented version and valid CRC.
+	•	On boot:
+	•	Load the slot with the highest valid version number.
 
-Using (⌘ + F) / (ctrl + F), Locate:
-
-WifiConfig wifiList[WIFI_COUNT] = {
-  { "wifissid1", "password1" },
-  { "wifissid2", "password2" },
-  { "wifissid3", "password3" },
-  { "wifissid4", "password4" },
-  { "wifissid5", "password5" }
-};
-
-Replace the values with your real network credentials.
-The device will automatically try each network until it connects.
-
-2. Servo Positions
-
-Adjust servo positions depending on your mechanical design.
-
-Using (⌘ + F) / (ctrl + F), Locate:
-
-static int cfg_SERVO_POS_CLOSED   = 52;
-static int cfg_SERVO_POS_RELEASED = 152;
-
-Ensure:
-	•	CLOSED = window guard locked
-	•	RELEASED = window guard deployed
-
-3. Fire Detection Thresholds
-
-Modify temperature triggers if needed.
-
-Using (⌘ + F) / (ctrl + F), Locate:
-
-static float cfg_FIRESTART = 35.0f;
-static float cfg_FIRECLR   = 35.0f;
-
-Meaning:
-	•	FIRESTART → temperature that triggers the fire state
-	•	FIRECLR → temperature that clears fire state
+This prevents a single interrupted write from destroying stored statistics.
 
 
-4. Simulation Limits
+- Persistent Storage Write Strategy
 
-Maximum simulation set temperature:
+Frequent writes reduce storage lifespan and can stall the system during blocking operations.
 
-static float cfg_SIMMAX = 1674.1f;
+Implement the following policies:
+	•	Buffer log writes
+	•	Accumulate several events before committing them to storage.
+	•	Timed flushing
+	•	Flush buffered events at regular intervals.
+	•	Immediate flush for critical events
+	•	Fire detection
+	•	Rapid temperature rise
+	•	System faults
+	•	Avoid repeated writes of identical data
+	•	Only update statistics when values actually change.
 
-## Procedure of Usage
-	1.	Connect the Arduino Nano ESP32 to your computer.
-	2.	Open the .ino file in Arduino IDE.
-	3.	Select:
-          Board: Arduino Nano ESP32
-	4.	Click Upload.
-  5. On the top right, turn on Serial Monitor by clicking the magnifying glass icon
-  6. Set the Serial Monitor baud rate to: 115200
+This reduces unnecessary wear on persistent memory while preserving critical data.
 
 
-## Basic Usage
+- Safety Interlocks for Deployment
 
-** Button Controls
+To ensure reliable operation in real environments, deploy the following safety mechanisms where possible:
+	•	Dual-condition deployment logic (optional configuration)
+	•	Deployment can require multiple indicators such as:
+	•	Fire threshold detection
+	•	Rapid temperature rise
+	•	Confirmation delay
+	•	Servo movement verification
+	•	Monitor time required to reach the commanded position.
+	•	If movement does not complete within expected time, log a servo fault event.
+	•	Tamper detection (optional hardware feature)
+	•	Add an enclosure switch or similar mechanism.
+	•	Log tamper events when the system housing is opened.
 
-Single click
--  Toggle Manual Override
+These mechanisms reduce the risk of accidental or false system activation.
 
-Double click
--  Toggle Buzzer Mute
 
-Triple click
--  Print Stats and Log
+- Debug Message Standards
 
-Quad click
--  Clear EEPROM Stats and Logs
+All debug and diagnostic output must remain professional and neutral.
 
-Long press
--  Cancel override and mute buzzer
+Guidelines:
+	•	Avoid offensive or hostile language in messages.
+	•	Use clear and descriptive text indicating system state or error condition.
+	•	Messages should be suitable for review in logs, presentations, and shared repositories.
 
-** Serial Commands
 
-Open the Serial Monitor and type commands.
+- Power-Loss Resilience
 
-Examples:
-HELP
-STATS
-LOG
-SIM 60
-RGB TEST PULSE
-SERVO TEST
-DISPLAY COUNTUP
+The system must be able to recover safely from sudden power interruptions.
 
-** EEPROM Logging
+To support this:
+	•	Validate all persistent records with CRC.
+	•	Ensure writes occur in deterministic steps.
+	•	Ensure partially written records are ignored on boot.
+	•	Maintain a reliable mechanism to determine the last valid log entry.
 
-The system stores:
-	•	Event history
-	•	Maximum temperature reached
-	•	Total fire time
-	•	Button interaction statistics
+This guarantees the system always boots into a consistent state.
 
-EEPROM capacity:  4096 bytes
+
+Following these practices ensures the system remains reliable, verifiable, and safe when deployed or extended by other contributors.
